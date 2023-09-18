@@ -87,24 +87,6 @@ def eval_gp(model,x_test,likelihood,x_scaler=[],inputScaled=True,y_scaler=[],out
     
     return predictive_mean, predictive_stdev, lower, upper
 
-# % [markdown]
-# # Step One: Importing and Formatting Data
-# 
-# There are several steps that are usually taken when fitting a data-driven model: scaling the data, and dividing the test/train/validation split.
-# 
-# ## Why apply a logarithm to the output data?
-# 
-# In this whole process, we are assuming that the true interfacial toughness $y$ can be represented by a true underlying mapping $G(x)$ from the input space $x \in \mathbb{R}^{3}$ (the temperature, pressure, and time inputs) to the output space $y \in \mathbb{R}$, with some additive uncertainty $\epsilon$. Symbolically, we are assuming:
-# \begin{equation}
-# y=G(x)+\epsilon.
-# \end{equation}
-# 
-# Ideally, we would model the underlying truth $y$ via a surrogate, say $\hat{G}(x)$. However, since we plan to use a Gaussian Process to predict outputs $y \geq 0$, whose predictions will be Gaussian (and Gaussian distributions have no strict upper/lower bounds, i.e. they may have samples of $y$ that are negative), we are actually interested in finding a $\hat{G}: x \rightarrow \ln{(y)}$ since a Gaussian distribution on $\ln{(y)}$ produces strictly positive predictions when exponentiated. Therefore, we seek:
-# \begin{equation}
-# \ln{(y)}=\hat{G}(x) + \eta
-# \end{equation}
-# where the measurements of $\ln{(y)}$ are themselves Gaussian random variables (and therefore $y$ is assumed to be a log-normal random variable).
-
 # %% import data
 from sklearn.model_selection import train_test_split
 from sklearn import preprocessing
@@ -118,6 +100,9 @@ noises = df.loc[:,"Stdev (J/m^2)"]
 nData = len(x)
 x = np.array(x); y=np.array(y); noises = np.array(noises)
 
+# defining priors
+prior_bounds = np.array([0.45, 1.6])
+
 #%% Leave-One-Out (LOO) Test Metric Loop
 final_nlpd = torch.zeros(nData)
 final_msll = torch.zeros(nData)
@@ -125,10 +110,13 @@ final_mse = torch.zeros(nData)
 final_mae = torch.zeros(nData)
 loo_means = np.zeros((nData,))
 loo_stdevs = np.zeros((nData,))
+loo_uppers = np.zeros((nData,))
+loo_lowers = np.zeros((nData,))
 
 for i in range(nData):#range(nData): # i indicates the data index to leave out as a test dataset
     selector = [index for index in range(nData) if index != i] # all but index i
 
+    # selecting LOO datasets
     x_train = x[selector,:]
     y_train = y[selector]
     noises_train = noises[selector]
@@ -145,18 +133,6 @@ for i in range(nData):#range(nData): # i indicates the data index to leave out a
     x_test = torch.tensor(np.array(x_test)).reshape(1,-1)
     y_test = torch.tensor(np.array(y_test)).reshape(-1,1)
 
-    # % [markdown]
-    # ## Why scale the data?
-    # 
-    # For almost all data-driven models, normalizing the input and output data can dramatically improve model performance. One intuitive way to think about this is to consider the case where one input or output ranges from say 0 to 1000 while another ranges from 0 to 1. When the model is updated and optimized according to say MSE, will it take the two outputs into equal consideration? Probably not, because the MSE of the output vector is dominated by the larger component, and the model may not consider all of the outputs equally during training.
-    # 
-    # Here, we center and scale the inputs and outputs so that they roughly match a standard normal distribution, $N(0,1)$. This is a best practice for GPs.
-    # 
-    # In scikit-learn, there is a StandardScaler tool that does exactly this. To transform "physical" quantities of interfacial toughness to the scaled output, use $\mathtt{y\_scaler.transform(y\_unscaled)}$, and to do the inverse transformation to get scaled output from the GP into the units J/m^2, use $\mathtt{y\_scaler.inverse\_transform(y\_scaled)}$.
-    # 
-    # Also note that the $\mathtt{noises}$ (I will explain how they are used more later on) need to also be normalized by dividing by the standard deviation of the output data. We do not use the standard scaler here because we do not want these values to be centered, just scaled the same way we scaled the outputs $y$. These noises represent the uncertainty (standard deviations) of each observation, uncertainty information that the GP can be trained on rather than taking the data to be exact.
-
-    # %
     # % pre process data
 
     # scale x data per standard scaler to N(0,1)
@@ -175,38 +151,19 @@ for i in range(nData):#range(nData): # i indicates the data index to leave out a
     y_scaler = preprocessing.StandardScaler().fit(y_train.reshape(-1,1))
     y_train = torch.tensor(y_scaler.transform(y_train.reshape(-1,1))).squeeze().double()
     y_test = torch.tensor(y_scaler.transform(y_test)).double()
+    y_bounds = y_scaler.transform(np.log(prior_bounds.reshape(-1,1)))
+    y_prior_std = (y_bounds[1][0]-y_bounds[0][0])/4
     nTrain = y_train.size(dim=0)
 
-    # checking dimensions of test/training set
-    #print(noises_train.dtype)
-    #print(x_train.size())
-    #print(y_train.size())
-    #print(x_test.size())
-    #print(y_test.size())
-    #print(noises_train.size())
-
-
-    #% [markdown]
-    # ## Step Two: Defining our GP Model
-    # 
-    # A Gaussian Process model embeds the assumption that any finite number of random variables produced by the model are jointly Gaussian. In other words, any outputs predicted by the GP are related by a multivariate Gaussian distribution, which can either be sampled from (producing scalar outputs) or taken as random variables (producing RV outputs). To make these predictions, the GP is defined by a mean function $m(x)$ and a kernel or covariance function $k(x,x')$:
-    # \begin{equation}
-    #     f(x) \sim GP\left( m(x), k(x,x') \right),
-    # \end{equation}
-    # with outputs associated with an input $x_{i} \in \mathbb{R}^{3}$:
-    # \begin{equation}
-    #     y_{i} = N\left(m(x_{i}), k(x_{i},x') \right).
-    # \end{equation}
-    # 
-    # In our case, the mean function $m(x)$ is a linear 
-
-    #%
+    # defining model
     class ExactGPModel(gpytorch.models.ExactGP):
         def __init__(self, train_x, train_y, likelihood):
             super(ExactGPModel, self).__init__(train_x, train_y, likelihood)
             self.mean_module = gpytorch.means.LinearMean(input_size=3)
-            self.covar_module = gpytorch.kernels.ScaleKernel(gpytorch.kernels.MaternKernel(ard_num_dims=3))
-           # self.covar_module = gpytorch.kernels.ScaleKernel(gpytorch.kernels.RBFKernel(ard_num_dims=3))
+            self.covar_module = gpytorch.kernels.ScaleKernel(\
+                gpytorch.kernels.MaternKernel(ard_num_dims=3), \
+                outputscale_prior = gpytorch.priors.NormalPrior(y_prior_std,y_prior_std/4))
+            #self.covar_module = gpytorch.kernels.ScaleKernel(gpytorch.kernels.RBFKernel(ard_num_dims=3))
 
         def forward(self, x):
             mean_x = self.mean_module(x)
@@ -221,7 +178,6 @@ for i in range(nData):#range(nData): # i indicates the data index to leave out a
     model.double()
     likelihood.double()
 
-    # % [markdown]
     # ## Step Three: tuning the kernel (hyper) paramaters
 
     model.train()
@@ -233,7 +189,7 @@ for i in range(nData):#range(nData): # i indicates the data index to leave out a
     # "Loss" for GPs - the marginal log likelihood
     mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
 
-    training_iter=300
+    training_iter=100
 
     print("Starting GP parameter tuning... for LOO index i="+str(i))
     for ii in range(training_iter):
@@ -277,6 +233,8 @@ for i in range(nData):#range(nData): # i indicates the data index to leave out a
     lower_inverse = y_scaler.inverse_transform(lower.reshape(-1,1))
     upper_inverse = y_scaler.inverse_transform(upper.reshape(-1,1))
     loo_means[i] = predictive_mean_inverse[0][0]
+    loo_uppers[i] = upper_inverse[0][0]
+    loo_lowers[i] = lower_inverse[0][0]
     loo_stdevs[i] = (upper_inverse[0][0]-lower_inverse[0][0])/4
 
 
@@ -289,6 +247,20 @@ for i in range(nData):#range(nData): # i indicates the data index to leave out a
 print("Median NLPD: "+str(torch.median(final_nlpd)))
 print("Median MSE: "+str(torch.median(final_mse)))
 print("Correlation coefficient: "+str(np.corrcoef(np.array(y),loo_means)[0,1]))
+
+# %% plotting LOO predictions vs training set data
+
+fig, ax = plt.subplots(dpi=1000)
+plt.errorbar(y, np.exp(loo_means),yerr=(np.exp(loo_uppers)-np.exp(loo_lowers))/2,fmt="_",color='orange',elinewidth=0.75,zorder=1,label='$+/-\sigma$ Confidence Interval')
+plt.scatter(y, np.exp(loo_means), c='crimson',zorder=2,label='Mean Predictions')
+p1 = max(max(np.exp(loo_uppers)), max(y))
+p2 = min(min(np.exp(loo_lowers)), min(y))
+plt.plot([p1, p2], [p1, p2], 'b-')
+plt.xlabel('True Values [$J/m^{2}$]', fontsize=15)
+plt.ylabel('LOO Predictions [$J/m^{2}$]', fontsize=15)
+plt.axis('equal')
+plt.legend()
+plt.title('LOO Predictions for Interfacial Toughness vs. True Data')
 
 #%% Now creating final model using full dataset
 x_train = x[:,:]
@@ -315,13 +287,18 @@ noises_train = noises_train.double()
 y_train = torch.log(y_train).double()
 y_scaler = preprocessing.StandardScaler().fit(y_train.reshape(-1,1))
 y_train = torch.tensor(y_scaler.transform(y_train.reshape(-1,1))).squeeze().double()
+y_bounds = y_scaler.transform(np.log(prior_bounds.reshape(-1,1)))
+y_prior_std = (y_bounds[1][0]-y_bounds[0][0])/4
 nTrain = y_train.size(dim=0)
 #%
 class ExactGPModel(gpytorch.models.ExactGP):
     def __init__(self, train_x, train_y, likelihood):
         super(ExactGPModel, self).__init__(train_x, train_y, likelihood)
         self.mean_module = gpytorch.means.LinearMean(input_size=3)
-        self.covar_module = gpytorch.kernels.ScaleKernel(gpytorch.kernels.MaternKernel(ard_num_dims=3))
+        self.covar_module = gpytorch.kernels.ScaleKernel(\
+                gpytorch.kernels.MaternKernel(ard_num_dims=3), \
+                outputscale_prior = gpytorch.priors.NormalPrior(y_prior_std,y_prior_std/16))
+        #self.covar_module = gpytorch.kernels.ScaleKernel(gpytorch.kernels.MaternKernel(ard_num_dims=3))
         #self.covar_module = gpytorch.kernels.ScaleKernel(gpytorch.kernels.RBFKernel(ard_num_dims=3))
 
     def forward(self, x):
@@ -337,9 +314,6 @@ model = ExactGPModel(x_train, y_train, likelihood)
 model.double()
 likelihood.double()
 
-# need to find way to set prior variance (constant in front of RBF kernel)
-
-# % [markdown]
 # ## Step Three: tuning the kernel (hyper) parameters
 
 model.train()
@@ -421,6 +395,7 @@ plt.axis('equal')
 ax1.set_title('Real-Valued Predictions vs. Training Data')
 
 #%% plotting heatmaps
+import matplotlib
 x_grids = pd.read_csv('gridspace_new.csv')
 x_pred = torch.tensor(np.array(x_grids))
 
@@ -450,51 +425,51 @@ for test_time in [5,10,15]:
     
     # mean plots
     fig, ax = plt.subplots(dpi=1000)
-    tcf = ax.tricontourf(x_pred_inverse[li:ui,1],x_pred_inverse[li:ui,2],mean_pred_array[li:ui,:].squeeze())
     x=np.array(x)
     y=np.array(y)
     trueYs = y[np.where(x[:,0]==test_time)].reshape(-1,1)
     trueXs = x[np.where(x[:,0]==test_time)][:,1:3]
-    ax.scatter(trueXs[:,0], trueXs[:,1],c=trueYs.squeeze(),marker='*')#,marker='*',label='Training Data')
+    mi = np.min((min(mean_pred_array[li:ui,:]), min(trueYs)))
+    ma = np.max((max(mean_pred_array[li:ui,:]), max(trueYs)))
+    norm = matplotlib.colors.Normalize(vmin=mi,vmax=ma)
+    tcf = ax.tricontourf(x_pred_inverse[li:ui,1],x_pred_inverse[li:ui,2],mean_pred_array[li:ui,:].squeeze(),norm=norm)
+    ax.scatter(trueXs[:,0], trueXs[:,1],c=trueYs.squeeze(),marker='*',norm=norm)#,marker='*',label='Training Data')
     plt.colorbar(tcf, ax=ax)
     ax.set_title("Model Mean Predictions at Time = "+str(test_time)+" min")
     
     # lower CI plots
     fig1, ax1 = plt.subplots(dpi=1000)
-    tcf = ax1.tricontourf(x_pred_inverse[li:ui,1],x_pred_inverse[li:ui,2],lower_inverse[li:ui,:].squeeze())
-    x=np.array(x)
-    y=np.array(y)
-    trueYs = y[np.where(x[:,0]==test_time)].reshape(-1,1)
-    trueXs = x[np.where(x[:,0]==test_time)][:,1:3]
-    ax1.scatter(trueXs[:,0], trueXs[:,1],c=trueYs.squeeze(),marker='*')#,marker='*',label='Training Data')
-    plt.colorbar(tcf, ax=ax1)
+    mi = np.min((min(lower_inverse[li:ui,:]), min(trueYs)))
+    ma = np.max((max(lower_inverse[li:ui,:]), max(trueYs)))
+    norm = matplotlib.colors.Normalize(vmin=mi,vmax=ma)
+    tcf = ax1.tricontourf(x_pred_inverse[li:ui,1],x_pred_inverse[li:ui,2],lower_inverse[li:ui,:].squeeze(),norm=norm)
+    ax1.scatter(trueXs[:,0], trueXs[:,1],c=trueYs.squeeze(),marker='*',norm=norm)#,marker='*',label='Training Data')
+    fig1.colorbar(tcf, ax=ax1)
     ax1.set_title("Lower CI Predictions at Time = "+str(test_time)+" min")
     
     # upper CI plots
     fig2, ax2 = plt.subplots(dpi=1000)
-    tcf = ax2.tricontourf(x_pred_inverse[li:ui,1],x_pred_inverse[li:ui,2],upper_inverse[li:ui,:].squeeze())
-    x=np.array(x)
-    y=np.array(y)
-    trueYs = y[np.where(x[:,0]==test_time)].reshape(-1,1)
-    trueXs = x[np.where(x[:,0]==test_time)][:,1:3]
-    ax2.scatter(trueXs[:,0], trueXs[:,1],c=trueYs.squeeze(),marker='*')#,marker='*',label='Training Data')
-    plt.colorbar(tcf, ax=ax2)
+    mi = np.min(((min(upper_inverse[li:ui,:]), min(trueYs))))
+    ma = np.max(((max(upper_inverse[li:ui,:]), max(trueYs))))
+    norm = matplotlib.colors.Normalize(vmin=mi,vmax=ma)
+    tcf = ax2.tricontourf(x_pred_inverse[li:ui,1],x_pred_inverse[li:ui,2],upper_inverse[li:ui,:].squeeze(),norm=norm)
+    ax2.scatter(trueXs[:,0], trueXs[:,1],c=trueYs.squeeze(),marker='*',norm=norm)#,marker='*',label='Training Data')
+    fig2.colorbar(tcf, ax=ax2)
     ax2.set_title("Upper CI Predictions at Time = "+str(test_time)+" min")
 
     # St Dev plots
-    li = int((test_time/5-1)*2500)
-    ui = int(li+2500)
-    print(li)
-    print(ui)
-    plt.figure()
-    plt.tricontourf(x_pred_inverse[li:ui,1],x_pred_inverse[li:ui,2],predictive_stdev[li:ui].squeeze())
+    fig3, ax3 = plt.subplots()
     x=np.array(x)
     y=np.array(y)
     noises=np.array(noises)
     trueNoises = noises[np.where(x[:,0]==test_time)].reshape(-1,1)/(2*torch.std(y_train))
     trueXs = (x[np.where(x[:,0]==test_time)])[:,1:3]
-    plt.scatter(trueXs[:,0], trueXs[:,1],c=trueNoises.squeeze(),marker='*')#,label='Input StDevs')
-    plt.colorbar()
+    mi = np.min(((min(predictive_stdev[li:ui,:]), min(trueNoises))))
+    ma = np.max(((max(predictive_stdev[li:ui,:]), max(trueNoises))))
+    norm = matplotlib.colors.Normalize(vmin=mi,vmax=ma)
+    tcf = plt.tricontourf(x_pred_inverse[li:ui,1],x_pred_inverse[li:ui,2],predictive_stdev[li:ui].squeeze(),norm=norm)
+    plt.scatter(trueXs[:,0], trueXs[:,1],c=trueNoises.squeeze(),marker='*',norm=norm)#,label='Input StDevs')
+    fig3.colorbar(tcf, ax=ax3)
     plt.title("Model StDev Predictions at Time = "+str(test_time)+" min")
 
 
