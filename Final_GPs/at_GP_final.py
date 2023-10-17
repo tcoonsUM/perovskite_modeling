@@ -485,8 +485,8 @@ lower_inverse = np.array(y_scaler.inverse_transform(lower.reshape(-1,1)))
 predictive_stdev = (upper_inverse-lower_inverse)/4
 
 mean_pred_array = predictive_mean_inverse
-mean_pred_results = np.concatenate((x_pred_inverse, predictive_mean_inverse,predictive_stdev), axis=1)
-df_results = pd.DataFrame(mean_pred_results, columns = ['Time (sec)', 'Pressure (MPa)','Temp (C)', 'Mean', 'StDev'])
+mean_pred_results = np.concatenate((x_pred_inverse, predictive_mean_inverse,predictive_stdev,lower_inverse,upper_inverse), axis=1)
+df_results = pd.DataFrame(mean_pred_results,columns = ['Time (sec)', 'Pressure (MPa)','Temp (C)','Mean', 'StDev','Lower CI','Upper CI'])
 df_results.to_csv('at_GP_heatmap_preds.csv', index=False)
 
 levelsi=np.arange(100)

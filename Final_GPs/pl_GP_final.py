@@ -415,27 +415,33 @@ print("Correlation coefficient: "+str(np.corrcoef(y,predictive_mean_inverse.sque
 # %% plotting predictions vs training set data
 
 fig, ax = plt.subplots(dpi=1000)
-plt.errorbar(y_train, predictive_mean,yerr=(upper-lower)/2,fmt="_",color='orange',elinewidth=0.75,zorder=1)
-plt.scatter(y_train, predictive_mean, c='crimson',zorder=2)
-p1 = max(max(predictive_mean), max(y_train))
-p2 = min(min(predictive_mean), min(y_train))
+yerrs = np.vstack((predictive_mean.numpy()-lower.numpy(),upper.numpy()-predictive_mean.numpy()))
+plt.errorbar(y_train, predictive_mean,yerr=yerrs,fmt="_",color='orange',elinewidth=0.75,zorder=1)
+plt.scatter(y_train, predictive_mean, c='crimson',zorder=2,label='Mean Predictions')
+p1 = max(max(predictive_mean).item(), max(y_train))
+p2 = min(min(predictive_mean).item(), min(y_train))
 plt.plot([p1, p2], [p1, p2], 'b-')
 plt.xlabel('True Values', fontsize=15)
 plt.ylabel('Predictions', fontsize=15)
 plt.axis('equal')
+plt.legend()
 plt.title('Normalized Predictions vs. Training Data')
 
 fig1, ax1 = plt.subplots(dpi=1000)
-yerr = (upper_inverse-lower_inverse).squeeze()/2
-ax1.errorbar(y, predictive_mean_inverse.squeeze(),yerr=yerr,fmt="_",color='orange',elinewidth=0.75,zorder=1)
-ax1.scatter(y, predictive_mean_inverse, c='crimson',zorder=2)
-p1 = max(max(predictive_mean_inverse), max(y))
-p2 = min(min(predictive_mean_inverse), min(y))
+yerrs_inverse = np.hstack((predictive_mean_inverse-lower_inverse,upper_inverse-predictive_mean_inverse)).transpose()
+ax1.errorbar(y, predictive_mean_inverse.squeeze(),yerr=yerrs_inverse,fmt="_",color='orange',elinewidth=0.75,zorder=1,label='$+/-2\sigma$ Confidence Interval')
+ax1.scatter(y, predictive_mean_inverse, c='crimson',zorder=2,label='Mean Predictions')
+#plt.scatter(y, lower_inverse, c='green')
+#plt.scatter(y, upper_inverse, c='purple')
+p1 = max(max(predictive_mean_inverse)[0], max(y))
+p2 = min(min(predictive_mean_inverse)[0], min(y))
 ax1.plot([p1, p2], [p1, p2], 'b-')
 ax1.set_xlabel('True Values', fontsize=15)
 ax1.set_ylabel('Predictions', fontsize=15)
 plt.axis('equal')
+ax1.legend()
 ax1.set_title('Real-Valued Predictions vs. Training Data')
+
 
 #%% plotting heatmaps
 x_grids = pd.read_csv('gridspace_points_input.csv')
@@ -457,8 +463,8 @@ predictive_stdev = (upper_inverse-lower_inverse)/4
 print('x shape', x_pred_inverse.shape)
 print('predicted mean shape: ', predictive_mean_inverse.shape)
 mean_pred_array = np.array(predictive_mean_inverse)
-mean_pred_results = np.concatenate((x_pred_inverse, predictive_mean_inverse,predictive_stdev), axis=1)
-df_results = pd.DataFrame(mean_pred_results,columns = ['Time (sec)', 'Pressure (MPa)','Temp (C)','Mean', 'StDev'])
+mean_pred_results = np.concatenate((x_pred_inverse, predictive_mean_inverse,predictive_stdev,lower_inverse,upper_inverse), axis=1)
+df_results = pd.DataFrame(mean_pred_results,columns = ['Time (sec)', 'Pressure (MPa)','Temp (C)','Mean', 'StDev','Lower CI','Upper CI'])
 df_results.to_csv('./heatmaps/PL_GP_heatmap.csv', index=False)
 #%%
 levelsi=np.linspace(0,13,num=100)
