@@ -59,6 +59,7 @@ def gridspace_points(output_file_path, output_file_name, column_names, x_range, 
 #df_test = gridspace_points('./','gridspace_new', ['Time_min','Pressure_MPA', 'Temperature_C'],[0, 8.27],[70, 150],[5,10,15],)
 
 # %% import data
+
 from sklearn.model_selection import train_test_split
 from sklearn import preprocessing
 print("import data")
@@ -95,6 +96,7 @@ for i in range(nData): # i indicates the data index to leave out as a test datas
     x_train = x[selector,:]
     y_train = y[selector]; y_upper_train = y_upper[selector]; y_lower_train = y_lower[selector]
     noises_train = noises[selector]
+    y_train_scaler = np.hstack((y,np.array([0.,100.])))
 
     x_test = x[i,:]
     y_test = y[i]; y_upper_test = y_upper[i]; y_lower_test = y_lower[i]
@@ -319,6 +321,7 @@ x_train = x[:,:]
 y_train = y[:]; y_upper_train = y_upper[:]; y_lower_train = y_lower[:]
 noises_train = noises[:]
 nTrain = np.shape(y_train)[0]
+y_train_scaler = np.hstack((y,np.array([0.,100.])))
 
 # % pre process data
 
@@ -327,17 +330,17 @@ scaler = preprocessing.StandardScaler().fit(x_train)
 x_train = torch.tensor(scaler.transform(x_train)).double()
 
 # scale y data to U(0,1)
-y_scaler = preprocessing.QuantileTransformer(n_quantiles=nData-1).fit(y_train.reshape(-1,1))
+y_scaler = preprocessing.QuantileTransformer(n_quantiles=nData-1).fit(y_train_scaler.reshape(-1,1))
 y_train = y_scaler.transform(y_train.reshape(-1,1)) * (1-1e-8)  + 1e-16
 y_lower_train = y_scaler.transform(y_lower_train.reshape(-1,1)) * (1-1e-8)  + 1e-16
 y_upper_train = y_scaler.transform(y_upper_train.reshape(-1,1)) * (1-1e-8)  + 1e-16
 y_bounds = y_scaler.transform(prior_bounds.reshape(-1,1)) * (1-1e-8)  + 1e-16
 
 # apply inverse CDF to y data
-# y_train = norm.ppf(y_train)
-# y_lower_train = norm.ppf(y_lower_train)
-# y_upper_train = norm.ppf(y_upper_train)
-# y_bounds = norm.ppf(y_bounds)
+# y_train = norm.ppf(y_train/100)
+# y_lower_train = norm.ppf(y_lower_train/100)
+# y_upper_train = norm.ppf(y_upper_train/100)
+# y_bounds = norm.ppf(prior_bounds/100)
 
 # converting data arrays into torch tensors
 y_train = torch.tensor(y_train).squeeze().double()
@@ -542,4 +545,38 @@ for test_time in [5,10,15]:
     plt.title("Model StDev Predictions at Time = "+str(test_time)+" min")
 
 
+# %% looking at shrinkage of covariance
+likelihoodness = False
+temps = torch.linspace(65,155,40)
+pressures = 8.273712*torch.ones(40)
+times = 15.*torch.ones(40)
+x_orig = torch.vstack((times,pressures,temps)).transpose(0,1)
+x_trans = torch.tensor(scaler.transform(x_orig))
+fullModel.eval()
+with torch.no_grad():
+    if likelihoodness:
+        trained_pred_dist = fullLikelihood(fullModel(x_trans))
+    else:
+        trained_pred_dist = fullModel(x_trans)
+    predictive_mean = trained_pred_dist.mean
+    lower, upper = trained_pred_dist.confidence_region()
+predictive_mean_inverse = y_scaler.inverse_transform(predictive_mean.reshape(-1,1))
+lower_inverse = y_scaler.inverse_transform(lower.reshape(-1,1))
+upper_inverse = y_scaler.inverse_transform(upper.reshape(-1,1))
+trueYs = y[np.intersect1d(np.where(x[:,0]==15.),np.where(x[:,1]==8.273712))].reshape(-1,1)
+trueXs = x[np.intersect1d(np.where(x[:,0]==15.),np.where(x[:,1]==8.273712))]
+# %%
+fig2, ax2 = plt.subplots(dpi=1000)
+ax2.plot(x_trans[:,2],predictive_mean,'-',label="Mean")
+ax2.fill_between(x_trans[:,2],lower,upper,alpha=0.4,label="CIs")
+ax2.scatter(scaler.transform(trueXs)[:,2],y_scaler.transform(trueYs),s=8,label="Training Data")
+ax2.set_xlabel('Normalized Temp')
+ax2.set_ylabel('Normalized AT Output')
+# %%
+fig3, ax3 = plt.subplots(dpi=1000)
+ax3.plot(temps,predictive_mean_inverse,'-',label="Mean")
+ax3.fill_between(temps,lower_inverse.squeeze(),upper_inverse.squeeze(),alpha=0.4,label="CIs")
+ax3.scatter(trueXs[:,2],trueYs,s=8,label="Training Data")
+ax3.set_xlabel('Temp (C)')
+ax3.set_ylabel('AT Output')
 # %%

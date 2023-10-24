@@ -20,7 +20,7 @@ import torch
 import gpytorch
 import pandas as pd
 import tqdm as notebook_tqdm
-import matplotlib
+import matplotlib.colors as colors
 
 #%%
 def gridspace_points(output_file_path, output_file_name, column_names, x_range, y_range, graph_levels):
@@ -98,14 +98,13 @@ for i in range(nData):#range(nData): # i indicates the data index to leave out a
 
     x_test = x[i,:]
     y_test = y[i]; y_upper_test = y_upper[i]; y_lower_test = y_lower[i]
-    print(y_test)
-    print(y_upper_test)
-    print(y_lower_test)
+    # print("original units  (mean, upper, lower):")
+    # print(y_test)
+    # print(y_upper_test)
+    # print(y_lower_test)
 
     # converting these objects from pandas dataframe to tensor in the cringiest way possible
     y_train = torch.tensor(np.array(y_train))
-    noises_train = torch.tensor(np.array(noises_train))
-    noises_test = torch.tensor(np.array(noises_test)).reshape(-1,1)
     x_test = torch.tensor(np.array(x_test)).reshape(1,-1)
     y_test = torch.tensor(np.array(y_test)).reshape(-1,1)
     y_lower_test = torch.tensor(np.array(y_lower_test)).reshape(-1,1)
@@ -130,10 +129,10 @@ for i in range(nData):#range(nData): # i indicates the data index to leave out a
     y_upper_test = torch.log(y_upper_test).double()
     y_lower_train = torch.log(y_lower_train).double()
     y_upper_train = torch.log(y_upper_train).double()
-    print("after log:")
-    print(y_test)
-    print(y_upper_test)
-    print(y_lower_test)
+    # print("after log (mean, upper, lower):")
+    # print(y_test)
+    # print(y_upper_test)
+    # print(y_lower_test)
 
     # need to scale noises only by dividing by stdev of (log'd) training targets
     #noises_train = noises_train/torch.std(y_train)
@@ -152,15 +151,16 @@ for i in range(nData):#range(nData): # i indicates the data index to leave out a
     y_test = torch.tensor(y_scaler.transform(y_test)).double()
     y_lower_test = torch.tensor(y_scaler.transform(y_lower_test)).double()
     y_upper_test = torch.tensor(y_scaler.transform(y_upper_test)).double() 
-    print("after y_scaling:")
-    print(y_test)
-    print(y_upper_test)
-    print(y_lower_test)
+    # print("after y_scaling (mean, upper, lower):")
+    # print(y_test)
+    # print(y_upper_test)
+    # print(y_lower_test)
 
     # recalculate lower/upper CIs in transformed space
     noises_train = ((y_upper_train - y_lower_train)/quantile)
     noises_test = ((y_upper_test - y_lower_test)/quantile)
-    print(noises_test)
+    # print("calculated noise stdev")
+    # print(noises_test)
     y_bounds = y_scaler.transform(np.log(prior_bounds.reshape(-1,1)))
     y_prior_std = (y_bounds[1][0]-y_bounds[0][0])/4
     nTrain = y_train.size(dim=0)
@@ -236,7 +236,10 @@ for i in range(nData):#range(nData): # i indicates the data index to leave out a
         trained_pred_dist = likelihood(model(x_test),noise=noises_test**2)
         predictive_mean = trained_pred_dist.mean
         lower, upper = trained_pred_dist.confidence_region()
-    #(predictive_mean)
+    # print("normalized-space predictions  (mean, upper, lower)::")
+    # print(predictive_mean)
+    # print(upper)
+    # print(lower)
 
     # scaling back input/output data
     y_test_inverse = y_scaler.inverse_transform(y_test)
@@ -248,6 +251,10 @@ for i in range(nData):#range(nData): # i indicates the data index to leave out a
     loo_uppers[i] = upper_inverse[0][0]
     loo_lowers[i] = lower_inverse[0][0]
     loo_stdevs[i] = (upper_inverse[0][0]-lower_inverse[0][0])/4
+    # print("real-units predictions  (mean, upper, lower)::")
+    # print(predictive_mean_inverse[0][0])
+    # print(upper_inverse[0][0])
+    # print(lower_inverse[0][0])
 
 
     # calculating LOO test metrics
@@ -485,14 +492,16 @@ for test_time in [5,10,15]:
     #ax.scatter(trueXs[:,0], trueXs[:,1],c=trueYs.squeeze(),marker='*',norm=normi)#,marker='*',label='Training Data')
     plt.colorbar(tcf, ax=ax)
     ax.set_title("Model Mean Predictions at Time = "+str(test_time)+" min")
+    plt.show()
     
     # lower CI plots
     fig1, ax1 = plt.subplots(dpi=1000)
     normi = colors.Normalize(vmin=mi,vmax=ma)
     tcf = ax1.tricontourf(x_pred_inverse[li:ui,1],x_pred_inverse[li:ui,2],lower_inverse[li:ui,:].squeeze(),norm=normi,levels=levelsi)
-    ax1.scatter(trueXs[:,0], trueXs[:,1],c=trueYs.squeeze(),marker='*',norm=normi)#,marker='*',label='Training Data')
+    #ax1.scatter(trueXs[:,0], trueXs[:,1],c=trueYs.squeeze(),marker='*',norm=normi)#,marker='*',label='Training Data')
     fig1.colorbar(tcf, ax=ax1)
     ax1.set_title("Lower CI Predictions at Time = "+str(test_time)+" min")
+    plt.show()
     
     # upper CI plots
     fig2, ax2 = plt.subplots(dpi=1000)
@@ -500,9 +509,10 @@ for test_time in [5,10,15]:
     #ma = np.max(((max(upper_inverse[li:ui,:]), max(trueYs))))
     normi = colors.Normalize(vmin=mi,vmax=ma)
     tcf = ax2.tricontourf(x_pred_inverse[li:ui,1],x_pred_inverse[li:ui,2],upper_inverse[li:ui,:].squeeze(),norm=normi,levels=levelsi)
-    ax2.scatter(trueXs[:,0], trueXs[:,1],c=trueYs.squeeze(),marker='*',norm=normi)#,marker='*',label='Training Data')
+    #ax2.scatter(trueXs[:,0], trueXs[:,1],c=trueYs.squeeze(),marker='*',norm=normi)#,marker='*',label='Training Data')
     fig2.colorbar(tcf, ax=ax2)
     ax2.set_title("Upper CI Predictions at Time = "+str(test_time)+" min")
+    plt.show()
 
     # St Dev plots
     fig3, ax3 = plt.subplots(dpi=1000)
@@ -518,6 +528,7 @@ for test_time in [5,10,15]:
     #plt.scatter(trueXs[:,0], trueXs[:,1],c=trueNoises.squeeze(),marker='*',norm=norm)#,label='Input StDevs')
     fig3.colorbar(tcf, ax=ax3)
     plt.title("Model StDev Predictions at Time = "+str(test_time)+" min")
+    plt.show()
 
 
 # %%

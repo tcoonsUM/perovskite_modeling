@@ -58,7 +58,7 @@ def gridspace_points(output_file_path, output_file_name, column_names, x_range, 
     return df_mesh_pts_flat
     #return mesh_list
 
-df_test = gridspace_points('./','gridspace_new', ['Pressure_MPA', 'Temperature_C', 'Time_min'],[0, 8.27],[70, 150],[5,10,15],)
+#df_test = gridspace_points('./','gridspace_new', ['Pressure_MPA', 'Temperature_C', 'Time_min'],[0, 8.27],[70, 150],[5,10,15],)
 
 
 # %%
